@@ -81,6 +81,7 @@ private:
 	void ProcessPackageSummaryAndNamesAndExportsAndImports( FAssetSerializationContext& Context ) const;
 	static FExportBundleEntry BuildPreloadDependenciesFromExportBundle( int32 ExportBundleIndex, FAssetSerializationContext& Context );
 	static void BuildPreloadDependenciesFromArcs( FAssetSerializationContext& Context );
+	static void BuildPreloadDependenciesFromExports( FAssetSerializationContext& Context );
 	static void ReorderPackageImports( const TArray<int32>& OriginalImportOrder, FAssetSerializationContext& Context );
 	
 	FPackageIndex CreateScriptObjectImport( const FPackageObjectIndex& PackageObjectIndex, FAssetSerializationContext& Context ) const;

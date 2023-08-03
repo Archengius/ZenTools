@@ -393,28 +393,28 @@ FSoftObjectPath FCookedAssetWriter::ResolvePackagePath( FPackageIndex PackageInd
 
 void FExportPreloadDependencyList::AddDependency( uint32 CurrentCommand, FPackageIndex FromIndex, uint32 FromCommand )
 {
-	if ( FromIndex != OwnerIndex )
+	if ( FromIndex != OwnerIndex && !FromIndex.IsNull() )
 	{
 		if ( CurrentCommand == FExportBundleEntry::ExportCommandType_Create )
 		{
 			if ( FromCommand == FExportBundleEntry::ExportCommandType_Create )
 			{
-				CreateBeforeCreateDependencies.Add( FromIndex );
+				CreateBeforeCreateDependencies.AddUnique( FromIndex );
 			}
 			else if ( FromCommand == FExportBundleEntry::ExportCommandType_Serialize )
 			{
-				SerializeBeforeCreateDependencies.Add( FromIndex );
+				SerializeBeforeCreateDependencies.AddUnique( FromIndex );
 			}
 		}
 		else if ( CurrentCommand == FExportBundleEntry::ExportCommandType_Serialize )
 		{
 			if ( FromCommand == FExportBundleEntry::ExportCommandType_Create )
 			{
-				CreateBeforeSerializeDependencies.Add( FromIndex );
+				CreateBeforeSerializeDependencies.AddUnique( FromIndex );
 			}
 			else if ( FromCommand == FExportBundleEntry::ExportCommandType_Serialize )
 			{
-				SerializeBeforeSerializeDependencies.Add( FromIndex );
+				SerializeBeforeSerializeDependencies.AddUnique( FromIndex );
 			}
 		}
 	}
@@ -482,6 +482,26 @@ void FCookedAssetWriter::BuildPreloadDependenciesFromArcs(FAssetSerializationCon
 	for ( int32 ExportBundleIndex = 0; ExportBundleIndex < Context.BundleData->ExportBundles.Num(); ExportBundleIndex++ )
 	{
 		BuildPreloadDependenciesFromExportBundle( ExportBundleIndex, Context );
+	}
+
+	// Append additional dependencies from the exports
+	BuildPreloadDependenciesFromExports( Context );
+}
+
+void FCookedAssetWriter::BuildPreloadDependenciesFromExports(FAssetSerializationContext& Context)
+{
+	for ( int32 ExportIndex = 0; ExportIndex < Context.ExportMap.Num(); ExportIndex++ )
+	{
+		const FObjectExport& Export = Context.ExportMap[ ExportIndex ];
+		FExportPreloadDependencyList& ExportDependencies = Context.PreloadDependencies[ ExportIndex ];
+
+		// SerializationBeforeCreateDependencies should be ClassIndex and TemplateIndex
+		ExportDependencies.AddDependency( FExportBundleEntry::ExportCommandType_Create, Export.ClassIndex, FExportBundleEntry::ExportCommandType_Serialize );
+		ExportDependencies.AddDependency( FExportBundleEntry::ExportCommandType_Create, Export.TemplateIndex, FExportBundleEntry::ExportCommandType_Serialize );
+
+		// CreateBeforeCreateDependencies should be OuterIndex and SuperIndex
+		ExportDependencies.AddDependency( FExportBundleEntry::ExportCommandType_Create, Export.OuterIndex, FExportBundleEntry::ExportCommandType_Create );
+		ExportDependencies.AddDependency( FExportBundleEntry::ExportCommandType_Create, Export.SuperIndex, FExportBundleEntry::ExportCommandType_Create );
 	}
 }
 
@@ -857,6 +877,7 @@ void FCookedAssetWriter::WritePackageExports(FArchive& Ar, FAssetSerializationCo
 
 		Ar.Serialize( SerialData.GetData(), SerialData.Num() );
 	}
+	Context.Summary.BulkDataStartOffset = Ar.Tell();
 
 	// Exports end with the package file tag
 	uint32 FooterData = PACKAGE_FILE_TAG;
