@@ -841,6 +841,8 @@ void FCookedAssetWriter::WritePackageHeader(FArchive& Ar, FAssetSerializationCon
 
 	// Update total header size
 	Context.Summary.TotalHeaderSize = (int32) Ar.Tell();
+	// Add TotalHeaderSize to the BulkDataStartOffset
+	Context.Summary.BulkDataStartOffset += Context.Summary.TotalHeaderSize;
 
 	// Fixup SerialOffset in ExportMap to take header size into account
 	{
