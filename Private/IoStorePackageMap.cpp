@@ -65,10 +65,20 @@ void FIoStorePackageMap::PopulateFromContainer(const TSharedPtr<FIoStoreReader>&
 		
 		TIoStatusOr<FIoStoreTocChunkInfo> ChunkInfo = Reader->GetChunkInfo( ChunkId );
 		TIoStatusOr<FIoBuffer> PackageBuffer = Reader->Read( ChunkId, FIoReadOptions() );
-		
-		if ( PackageBuffer.IsOk() )
+		check( PackageBuffer.IsOk() );
+
+		FPackageMapExportBundleEntry* ExportBundleEntry = ReadExportBundleData( PackageId, ChunkInfo.ValueOrDie(), PackageBuffer.ValueOrDie() );
+
+		// Required segment packages can have bulk data, memory mapped bulk data and optional bulk data
+		const TArray BulkDataChunkTypes{ EIoChunkType::BulkData, EIoChunkType::MemoryMappedBulkData, EIoChunkType::OptionalBulkData };
+
+		for ( const EIoChunkType BulkDataChunkType : BulkDataChunkTypes )
 		{
-			ReadExportBundleData( PackageId, ChunkInfo.ValueOrDie(), PackageBuffer.ValueOrDie() );
+			const FIoChunkId BulkDataChunkId = CreateIoChunkId( PackageId.Value(), 0, BulkDataChunkType );
+			if ( Reader->GetChunkInfo( BulkDataChunkId ).IsOk() )
+			{
+				ExportBundleEntry->BulkDataChunkIds.Add( BulkDataChunkId );
+			}
 		}
 	}
 
@@ -80,10 +90,15 @@ void FIoStorePackageMap::PopulateFromContainer(const TSharedPtr<FIoStoreReader>&
 		
 		TIoStatusOr<FIoStoreTocChunkInfo> ChunkInfo = Reader->GetChunkInfo( ChunkId );
 		TIoStatusOr<FIoBuffer> PackageBuffer = Reader->Read( ChunkId, FIoReadOptions() );
+		check( PackageBuffer.IsOk() );
 		
-		if ( PackageBuffer.IsOk() )
+		FPackageMapExportBundleEntry* ExportBundleEntry = ReadExportBundleData( PackageId, ChunkInfo.ValueOrDie(), PackageBuffer.ValueOrDie() );
+
+		// Optional segment packages can only have optional segment bulk data
+		const FIoChunkId BulkDataChunkId = CreateIoChunkId( PackageId.Value(), 1, EIoChunkType::BulkData );
+		if ( Reader->GetChunkInfo( BulkDataChunkId ).IsOk() )
 		{
-			ReadExportBundleData( PackageId, ChunkInfo.ValueOrDie(), PackageBuffer.ValueOrDie() );
+			ExportBundleEntry->BulkDataChunkIds.Add( BulkDataChunkId );
 		}
 	}
 
@@ -195,7 +210,7 @@ FPackageLocalObjectRef FIoStorePackageMap::ResolvePackageLocalRef( const FPackag
 	return Result;
 }
 
-void FIoStorePackageMap::ReadExportBundleData( const FPackageId& PackageId, const FIoStoreTocChunkInfo& ChunkInfo, const FIoBuffer& ChunkBuffer )
+FPackageMapExportBundleEntry* FIoStorePackageMap::ReadExportBundleData( const FPackageId& PackageId, const FIoStoreTocChunkInfo& ChunkInfo, const FIoBuffer& ChunkBuffer )
 {
 	const uint8* PackageSummaryData = ChunkBuffer.Data();
 	const FZenPackageSummary* PackageSummary = reinterpret_cast<const FZenPackageSummary*>(PackageSummaryData);
@@ -221,6 +236,7 @@ void FIoStorePackageMap::ReadExportBundleData( const FPackageId& PackageId, cons
 	PackageData.PackageName = PackageName;
 	PackageData.PackageFlags = PackageSummary->PackageFlags;
 	PackageData.VersioningInfo = VersioningInfo;
+	PackageData.PackageChunkId = ChunkInfo.Id;
 
 	// get rid of standard filename prefix
 	PackageData.PackageFilename.RemoveFromStart( TEXT("../../../") );
@@ -279,8 +295,8 @@ void FIoStorePackageMap::ReadExportBundleData( const FPackageId& PackageId, cons
 		ExportData.SuperIndex = ResolvePackageLocalRef( ExportMapEntry.SuperIndex, PackageHeader.ImportedPackages, ImportedPublicExportHashes );
 		ExportData.TemplateIndex = ResolvePackageLocalRef( ExportMapEntry.TemplateIndex, PackageHeader.ImportedPackages, ImportedPublicExportHashes );
 
-		ExportData.CookedSerialData = MakeShared<TArray<uint8>>();
-		ExportData.CookedSerialData->SetNumUninitialized(ExportMapEntry.CookedSerialSize);
+		ExportData.SerialDataSize = ExportMapEntry.CookedSerialSize;
+		ExportData.SerialDataOffset = INDEX_NONE;
 	}
 
 	// Read export bundles
@@ -303,12 +319,9 @@ void FIoStorePackageMap::ReadExportBundleData( const FPackageId& PackageId, cons
 			
 			if (BundleEntry->CommandType == FExportBundleEntry::ExportCommandType_Serialize)
 			{
-				const FPackageMapExportEntry& Export = PackageData.ExportMap[ BundleEntry->LocalExportIndex ];
-				const int32 ExportSerialSize = Export.CookedSerialData->Num();
-
-				// Copy the export data into the buffer that we have crated earlier
-				FMemory::Memcpy( Export.CookedSerialData->GetData(), PackageSummaryData + CurrentExportOffset, ExportSerialSize );
-				CurrentExportOffset += ExportSerialSize;
+				FPackageMapExportEntry& Export = PackageData.ExportMap[ BundleEntry->LocalExportIndex ];
+				Export.SerialDataOffset = CurrentExportOffset;
+				CurrentExportOffset += Export.SerialDataSize;
 			}
 			BundleEntry++;
 		}
@@ -346,4 +359,5 @@ void FIoStorePackageMap::ReadExportBundleData( const FPackageId& PackageId, cons
 			ArcsAr << ExternalArc.ToExportBundleIndex;
 		}
 	}
+	return &PackageData;
 }

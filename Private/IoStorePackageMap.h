@@ -82,8 +82,10 @@ struct FPackageMapExportEntry
 	EObjectFlags ObjectFlags{RF_NoFlags};
 	/** Flags to filter the export out on the client or server */
 	EExportFilterFlags FilterFlags{};
-	/** Serialized cooked data blob for this export */
-	TSharedPtr<TArray<uint8>> CookedSerialData;
+	/** Offset of the serial data from the start of the chunk */
+	int32 SerialDataOffset{0};
+	/** Size of the serialized cooked data */
+	int32 SerialDataSize{0};
 };
 
 /** Describes an internal dependency between two export bundles */
@@ -127,6 +129,10 @@ struct FPackageMapExportBundleEntry
 	TArray<FPackageMapExternalDependencyArc> ExternalArcs;
 	/** Filename of the package, retrieved from the chunk filename */
 	FString PackageFilename;
+	/** ID of the chunk in which exports of this package are located */
+	FIoChunkId PackageChunkId;
+	/** ID of the bulk data chunks for this package */
+	TArray<FIoChunkId> BulkDataChunkIds;
 };
 
 /** Package map is a central storage mapping package IDs (and overall any FPackageObjectIndex objects) to their names and locations */
@@ -154,7 +160,7 @@ public:
 	FORCEINLINE int32 GetTotalPackageCount() const { return PackageMap.Num(); }
 private:
 	void ReadScriptObjects( const FIoBuffer& ChunkBuffer );
-	void ReadExportBundleData( const FPackageId& PackageId, const FIoStoreTocChunkInfo& ChunkInfo, const FIoBuffer& ChunkBuffer );
+	FPackageMapExportBundleEntry* ReadExportBundleData( const FPackageId& PackageId, const FIoStoreTocChunkInfo& ChunkInfo, const FIoBuffer& ChunkBuffer );
 	
 	static FPackageLocalObjectRef ResolvePackageLocalRef( const FPackageObjectIndex& PackageObjectIndex, const TArrayView<const FPackageId>& ImportedPackages, const TArrayView<const uint64>& ImportedPublicExportHashes );
 };

@@ -3,6 +3,7 @@
 #include "CookedAssetWriter.h"
 #include "IoStorePackageMap.h"
 #include "ZenTools.h"
+#include "Dom/JsonObject.h"
 #include "HAL/FileManager.h"
 #include "Misc/Paths.h"
 #include "Serialization/LargeMemoryWriter.h"
@@ -10,6 +11,8 @@
 #include "UObject/Class.h"
 #include "UObject/Package.h"
 #include "UObject/SoftObjectPath.h"
+#include "Misc/FileHelper.h"
+#include "Serialization/JsonSerializer.h"
 
 FAssetSerializationWriter::FAssetSerializationWriter( FArchive& Ar, FAssetSerializationContext* Context ) : FArchiveProxy( Ar ), Context( Context )
 {
@@ -59,8 +62,9 @@ FCookedAssetWriter::FCookedAssetWriter(const TSharedPtr<FIoStorePackageMap>& InP
 {
 }
 
-void FCookedAssetWriter::WritePackagesFromContainer( const FIoContainerId& ContainerId )
+void FCookedAssetWriter::WritePackagesFromContainer( const TSharedPtr<FIoStoreReader>& Reader )
 {
+	const FIoContainerId ContainerId = Reader->GetContainerId();
 	UE_LOG( LogIoStoreTools, Display, TEXT("Writing asset files for Container %lld"), ContainerId.Value() );
 
 	FPackageContainerMetadata ContainerMetadata;
@@ -68,16 +72,91 @@ void FCookedAssetWriter::WritePackagesFromContainer( const FIoContainerId& Conta
 	{
 		for ( const FPackageId& PackageId : ContainerMetadata.PackagesInContainer )
 		{
-			WriteSinglePackage( PackageId );
+			WriteSinglePackage( PackageId, false, Reader );
 		}
 		for ( const FPackageId& OptionalPackageId : ContainerMetadata.OptionalPackagesInContainer )
 		{
-			WriteSinglePackage( OptionalPackageId );
+			WriteSinglePackage( OptionalPackageId, true, Reader );
 		}
 	}
 }
 
-void FCookedAssetWriter::WriteSinglePackage( FPackageId PackageId )
+void FCookedAssetWriter::WriteGlobalScriptObjects(const TSharedPtr<FIoStoreReader>& Reader) const
+{
+	TIoStatusOr<FIoBuffer> ScriptObjectsBuffer = Reader->Read(CreateIoChunkId(0, 0, EIoChunkType::ScriptObjects), FIoReadOptions());
+
+	if ( ScriptObjectsBuffer.IsOk() )
+	{
+		const FString ScriptObjectsFilename = FPaths::Combine( RootOutputDir, TEXT("ScriptObjects.bin") );
+		FFileHelper::SaveArrayToFile( TArrayView<const uint8>( ScriptObjectsBuffer.ValueOrDie().Data(), ScriptObjectsBuffer.ValueOrDie().DataSize() ), *ScriptObjectsFilename );
+
+		UE_LOG( LogIoStoreTools, Display, TEXT("Written ScriptObjects chunk to '%s'"), *ScriptObjectsFilename );
+	}
+}
+
+void FCookedAssetWriter::WritePackageStoreManifest() const
+{
+	const FString PackageStoreFilename = RootOutputDir / TEXT("PackageStoreManifest.json");
+	IFileManager::Get().MakeDirectory( *FPaths::GetPath( PackageStoreFilename ), true );
+
+	const TSharedPtr<FJsonObject> RootObject = MakeShared<FJsonObject>();
+
+	TStringBuilder<64> ChunkIdStringBuilder;
+	auto ChunkIdToString = [&ChunkIdStringBuilder](const FIoChunkId& ChunkId)
+	{
+		ChunkIdStringBuilder.Reset();
+		ChunkIdStringBuilder << ChunkId;
+		return *ChunkIdStringBuilder;
+	};
+	
+	TArray<TSharedPtr<FJsonValue>> FilesArray;
+	for ( const TPair<FIoChunkId, FString>& FilePair : ChunkIdToSavedFileMap )
+	{
+		const TSharedPtr<FJsonObject> FileObject = MakeShared<FJsonObject>();
+		FileObject->SetStringField( TEXT("Path"), FilePair.Value );
+		FileObject->SetStringField( TEXT("ChunkId"), ChunkIdToString( FilePair.Key ) );
+
+		FilesArray.Add( MakeShared<FJsonValueObject>( FileObject ) );
+	}
+	RootObject->SetArrayField( TEXT("Files"), FilesArray );
+
+	TArray<TSharedPtr<FJsonValue>> PackagesArray;
+	for ( const TPair<FName, FSavedPackageInfo>& SavedPackageInfo : SavedPackageMap )
+	{
+		const TSharedPtr<FJsonObject> PackageObject = MakeShared<FJsonObject>();
+		PackageObject->SetStringField( TEXT("Name"), SavedPackageInfo.Key.ToString() );
+
+		if ( !SavedPackageInfo.Value.ExportBundleChunks.IsEmpty() )
+		{
+			TArray<TSharedPtr<FJsonValue>> ExportBundleChunkIdsArray;
+			for ( const FIoChunkId& ExportBundleChunkId : SavedPackageInfo.Value.ExportBundleChunks )
+			{
+				ExportBundleChunkIdsArray.Add( MakeShared<FJsonValueString>( ChunkIdToString( ExportBundleChunkId ) ) );
+			}
+			PackageObject->SetArrayField( TEXT("ExportBundleChunkIds"), ExportBundleChunkIdsArray );
+		}
+
+		if ( !SavedPackageInfo.Value.BulkDataChunks.IsEmpty() )
+		{
+			TArray<TSharedPtr<FJsonValue>> BulkDataChunkIdsArray;
+			for ( const FIoChunkId& BulkDataChunkId : SavedPackageInfo.Value.BulkDataChunks )
+			{
+				BulkDataChunkIdsArray.Add( MakeShared<FJsonValueString>( ChunkIdToString( BulkDataChunkId ) ) );
+			}
+			PackageObject->SetArrayField( TEXT("BulkDataChunkIds"), BulkDataChunkIdsArray );
+		}
+		PackagesArray.Add( MakeShared<FJsonValueObject>( PackageObject ) );
+	}
+	RootObject->SetArrayField( TEXT("Packages"), PackagesArray );
+
+	FString ResultJsonString;
+	FJsonSerializer::Serialize( RootObject.ToSharedRef(), TJsonWriterFactory<>::Create( &ResultJsonString ) );
+
+	check( FFileHelper::SaveStringToFile( ResultJsonString, *PackageStoreFilename ) );
+	UE_LOG( LogIoStoreTools, Display, TEXT("Written PackageStore Manifest to '%s'"), *PackageStoreFilename );
+}
+
+void FCookedAssetWriter::WriteSinglePackage( FPackageId PackageId, bool bIsOptionalSegmentPackage, const TSharedPtr<FIoStoreReader>& Reader )
 {
 	FPackageMapExportBundleEntry ExportBundleEntry;
 	checkf( PackageMap->FindExportBundleData( PackageId, ExportBundleEntry ), TEXT("Failed to find export bundle entry for PackageId %lld"), PackageId.ValueForDebugging() );
@@ -93,13 +172,24 @@ void FCookedAssetWriter::WriteSinglePackage( FPackageId PackageId )
 	SerializationContext.PackageId = PackageId;
 	SerializationContext.PackageHeaderFilename = PackageFilename;
 	SerializationContext.BundleData = &ExportBundleEntry;
+	SerializationContext.IoStoreReader = Reader.Get();
+
+	FSavedPackageInfo& SavedPackageInfo = SavedPackageMap.FindOrAdd( SerializationContext.BundleData->PackageName );
+	SavedPackageInfo.ExportBundleChunks.Add( SerializationContext.BundleData->PackageChunkId );
 
 	// Populate package summary, and also process imports and exports
 	ProcessPackageSummaryAndNamesAndExportsAndImports( SerializationContext );
 
 	// Serialize exports into the separate file (event driven loader expects that)
 	{
-		const FString ExportsFilename = FPaths::ChangeExtension( SerializationContext.PackageHeaderFilename, LexToString( EPackageExtension::Exports ) );
+		FString ExtensionString = LexToString( EPackageExtension::Exports );
+		
+		// Optional segment packages have .o prefix before their extensions, e.g.
+		if ( bIsOptionalSegmentPackage )
+		{
+			ExtensionString.InsertAt( 0, TEXT(".o") );
+		}
+		const FString ExportsFilename = FPaths::ChangeExtension( SerializationContext.PackageHeaderFilename, ExtensionString );
 
 		const TUniquePtr<FArchive> ExportsArchive( IFileManager::Get().CreateFileWriter( *ExportsFilename, FILEWRITE_EvenIfReadOnly ) );
 		checkf( ExportsArchive.IsValid(), TEXT("Failed to load exports file '%s'"), *ExportsFilename );
@@ -112,7 +202,17 @@ void FCookedAssetWriter::WriteSinglePackage( FPackageId PackageId )
 	// Serialize package summary and other necessary data into the main asset header file
 	{
 		const EPackageExtension HeaderExtension = ( SerializationContext.Summary.GetPackageFlags() & PKG_ContainsMap ) != 0 ? EPackageExtension::Map : EPackageExtension::Asset;
-		const FString HeaderFilename = FPaths::ChangeExtension( SerializationContext.PackageHeaderFilename, LexToString( HeaderExtension ) );
+		FString ExtensionString = LexToString( HeaderExtension );
+
+		// Optional segment packages have .o prefix before their extensions, e.g.
+		if ( bIsOptionalSegmentPackage )
+		{
+			ExtensionString.InsertAt( 0, TEXT(".o") );
+		}
+		const FString HeaderFilename = FPaths::ChangeExtension( SerializationContext.PackageHeaderFilename, ExtensionString );
+		
+		FString RelativeFilename = FPaths::SetExtension( ExportBundleEntry.PackageFilename, ExtensionString );
+		ChunkIdToSavedFileMap.Add( SerializationContext.BundleData->PackageChunkId, RelativeFilename );
 
 		const TUniquePtr<FArchive> HeaderArchive( IFileManager::Get().CreateFileWriter( *HeaderFilename, FILEWRITE_EvenIfReadOnly ) );
 		checkf( HeaderArchive.IsValid(), TEXT("Failed to open header file '%s'"), *HeaderFilename );
@@ -121,6 +221,9 @@ void FCookedAssetWriter::WriteSinglePackage( FPackageId PackageId )
 		WritePackageHeader( ProxyWriter, SerializationContext );
 		HeaderArchive->Flush();
 	}
+
+	// Write bulk data
+	WriteBulkData( SerializationContext );
 
 	// Notify the user that we have finished writing the asset
 	UE_LOG( LogIoStoreTools, Display, TEXT("Serialized Package '%s' to '%s'"), *SerializationContext.BundleData->PackageName.ToString(), *SerializationContext.PackageHeaderFilename );
@@ -584,8 +687,8 @@ FPackageIndex FCookedAssetWriter::CreateObjectExport( const FPackageMapExportEnt
 
 	ObjectExport.ObjectFlags = ExportData.ObjectFlags;
 	
-	ObjectExport.SerialSize = ExportData.CookedSerialData->Num();
-	ObjectExport.SerialOffset = -1; // Not resolved yet
+	ObjectExport.SerialSize = INDEX_NONE;
+	ObjectExport.SerialOffset = INDEX_NONE;
 
 	ObjectExport.bForcedExport = false; // not serialized
 	ObjectExport.bNotForClient = EnumHasAnyFlags( ExportData.FilterFlags, EExportFilterFlags::NotForClient );
@@ -868,20 +971,51 @@ void FCookedAssetWriter::WritePackageHeader(FArchive& Ar, FAssetSerializationCon
 
 void FCookedAssetWriter::WritePackageExports(FArchive& Ar, FAssetSerializationContext& Context)
 {
+	// Open the package bundle chunk to read exports
+	TIoStatusOr<FIoBuffer> ChunkBuffer = Context.IoStoreReader->Read( Context.BundleData->PackageChunkId, FIoReadOptions() );
+	check( ChunkBuffer.IsOk() );
+	const uint8* ChunkDataStart = ChunkBuffer.ValueOrDie().Data();
+	const uint8* ChunkDataEnd = ChunkDataStart + ChunkBuffer.ValueOrDie().DataSize();
+	
 	// Write export blobs
 	for ( int32 i = 0; i < Context.ExportMap.Num(); i++ )
 	{
-		TArray<uint8>& SerialData = *Context.BundleData->ExportMap[ i ].CookedSerialData;
+		const FPackageMapExportEntry& OriginalExport = Context.BundleData->ExportMap[ i ];
 		FObjectExport& Export = Context.ExportMap[ i ];
 
 		Export.SerialOffset = Ar.Tell();
-		Export.SerialSize = SerialData.Num();
+		Export.SerialSize = OriginalExport.SerialDataSize;
 
-		Ar.Serialize( SerialData.GetData(), SerialData.Num() );
+		const uint8* SerialDataStart = ChunkDataStart + OriginalExport.SerialDataOffset;
+		check( SerialDataStart <= ChunkDataEnd );
+		Ar.Serialize( const_cast<uint8*>( SerialDataStart ), OriginalExport.SerialDataSize );
 	}
 	Context.Summary.BulkDataStartOffset = Ar.Tell();
 
 	// Exports end with the package file tag
 	uint32 FooterData = PACKAGE_FILE_TAG;
 	Ar << FooterData;
+}
+
+void FCookedAssetWriter::WriteBulkData( const FAssetSerializationContext& Context )
+{
+	FSavedPackageInfo& SavedPackageInfo = SavedPackageMap.FindOrAdd( Context.BundleData->PackageName );
+	
+	for ( const FIoChunkId& BulkDataChunkId : Context.BundleData->BulkDataChunkIds )
+	{
+		TIoStatusOr<FIoBuffer> BulkDataBuffer = Context.IoStoreReader->Read( BulkDataChunkId, FIoReadOptions() );
+		check( BulkDataBuffer.IsOk() );
+
+		TIoStatusOr<FIoStoreTocChunkInfo> ChunkInfo = Context.IoStoreReader->GetChunkInfo( BulkDataChunkId );
+		check( ChunkInfo.IsOk() );
+
+		FString RelativeFilename = ChunkInfo.ValueOrDie().FileName;
+		RelativeFilename.RemoveFromStart( TEXT("../../../") );
+
+		const FString ResultFilename = FPaths::Combine( RootOutputDir, RelativeFilename );
+		FFileHelper::SaveArrayToFile( TArrayView<const uint8>( BulkDataBuffer.ValueOrDie().Data(), BulkDataBuffer.ValueOrDie().DataSize() ), *ResultFilename );
+
+		ChunkIdToSavedFileMap.Add( BulkDataChunkId, RelativeFilename );
+		SavedPackageInfo.BulkDataChunks.Add( BulkDataChunkId );
+	}
 }

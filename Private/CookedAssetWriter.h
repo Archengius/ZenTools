@@ -36,6 +36,7 @@ struct FAssetSerializationContext
 	FPackageId PackageId;
 	FString PackageHeaderFilename;
 	FPackageMapExportBundleEntry* BundleData;
+	FIoStoreReader* IoStoreReader;
 	
 	FPackageFileSummary Summary;
 	int32 PackageSummaryEndOffset;
@@ -64,20 +65,30 @@ public:
 	virtual void SetFilterEditorOnly(bool InFilterEditorOnly) override;
 };
 
+struct FSavedPackageInfo
+{
+	TArray<FIoChunkId> ExportBundleChunks;
+	TArray<FIoChunkId> BulkDataChunks;
+};
+
 class ZENTOOLS_API FCookedAssetWriter
 {
 protected:
 	TSharedPtr<FIoStorePackageMap> PackageMap;
 	FString RootOutputDir;
 	int32 NumPackagesWritten;
+	TMap<FIoChunkId, FString> ChunkIdToSavedFileMap;
+	TMap<FName, FSavedPackageInfo> SavedPackageMap;
 public:
 	FCookedAssetWriter( const TSharedPtr<FIoStorePackageMap>& InPackageMap, const FString& InOutputDir );
 	
-	void WritePackagesFromContainer( const FIoContainerId& ContainerId );
+	void WritePackagesFromContainer( const TSharedPtr<FIoStoreReader>& Reader );
+	void WriteGlobalScriptObjects( const TSharedPtr<FIoStoreReader>& Reader ) const;
+	void WritePackageStoreManifest() const;
 
 	FORCEINLINE int32 GetTotalNumPackagesWritten() const { return NumPackagesWritten; }
 private:
-	void WriteSinglePackage( FPackageId PackageId );
+	void WriteSinglePackage( FPackageId PackageId, bool bIsOptionalSegmentPackage, const TSharedPtr<FIoStoreReader>& Reader );
 	void ProcessPackageSummaryAndNamesAndExportsAndImports( FAssetSerializationContext& Context ) const;
 	static FExportBundleEntry BuildPreloadDependenciesFromExportBundle( int32 ExportBundleIndex, FAssetSerializationContext& Context );
 	static void BuildPreloadDependenciesFromArcs( FAssetSerializationContext& Context );
@@ -98,4 +109,5 @@ private:
 
 	static void WritePackageHeader( FArchive& Ar, FAssetSerializationContext& Context );
 	static void WritePackageExports( FArchive& Ar, FAssetSerializationContext& Context );
+	void WriteBulkData(const FAssetSerializationContext& Context );
 };

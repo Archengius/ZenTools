@@ -124,10 +124,13 @@ bool FIOStoreTools::ExtractPackagesFromContainers( const FString& ContainerDirPa
 
 	for ( const TSharedPtr<FIoStoreReader>& Reader : ContainerReaders )
 	{
-		PackageWriter->WritePackagesFromContainer( Reader->GetContainerId() );
+		PackageWriter->WritePackagesFromContainer( Reader );
+		PackageWriter->WriteGlobalScriptObjects( Reader );
 	}
 	
 	UE_LOG( LogIoStoreTools, Display, TEXT("Done writing %d packages."), PackageWriter->GetTotalNumPackagesWritten() );
+
+	PackageWriter->WritePackageStoreManifest();
 	return true;
 }
 
