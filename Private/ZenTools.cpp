@@ -139,14 +139,14 @@ bool FIOStoreTools::ExecuteIOStoreTools(const TCHAR* Cmd)
 	if ( FParse::Command( &Cmd, TEXT("ExtractPackages") ) )
 	{
 		FString ContainerFolderPath;
-		if ( !FParse::Token( Cmd, ContainerFolderPath, true ) )
+		if ( !FParse::Token( Cmd, ContainerFolderPath, false ) )
 		{
 			UE_LOG( LogIoStoreTools, Display, TEXT("Usage: ZenTools ExtractPackages <ContainerFolderPath> <ExtractionDir> [--EncryptionKeys=<KeyFile>]") );
 			return false;
 		}
 
 		FString ExtractFolderRootPath;
-		if ( !FParse::Token( Cmd, ExtractFolderRootPath, true ) )
+		if ( !FParse::Token( Cmd, ExtractFolderRootPath, false ) )
 		{
 			UE_LOG( LogIoStoreTools, Display, TEXT("Usage: ZenTools ExtractPackages <ContainerFolderPath> <ExtractionDir> [-EncryptionKeys=<KeyFile>]") );
 			return false;
