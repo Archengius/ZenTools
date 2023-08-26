@@ -4,6 +4,7 @@
 #include "Serialization/LargeMemoryReader.h"
 #include "Serialization/MemoryReader.h"
 #include "IO/IoContainerHeader.h"
+#include "Misc/CommandLine.h"
 
 void FIoStorePackageMap::PopulateFromContainer(const TSharedPtr<FIoStoreReader>& Reader)
 {
@@ -65,7 +66,8 @@ void FIoStorePackageMap::PopulateFromContainer(const TSharedPtr<FIoStoreReader>&
 		
 		TIoStatusOr<FIoStoreTocChunkInfo> ChunkInfo = Reader->GetChunkInfo( ChunkId );
 		TIoStatusOr<FIoBuffer> PackageBuffer = Reader->Read( ChunkId, FIoReadOptions() );
-		check( PackageBuffer.IsOk() );
+		checkf( PackageBuffer.IsOk(), TEXT("Failed to find ChunkId %s for PackageId 0x%llx in ContainerId 0x%llx (ChunkInfo valid: %d)"),
+			*LexToString( ChunkId ), PackageId.ValueForDebugging(), Reader->GetContainerId().Value(), ChunkInfo.IsOk() );
 
 		FPackageMapExportBundleEntry* ExportBundleEntry = ReadExportBundleData( PackageId, ChunkInfo.ValueOrDie(), PackageBuffer.ValueOrDie() );
 
@@ -223,8 +225,27 @@ FPackageMapExportBundleEntry* FIoStorePackageMap::ReadExportBundleData( const FP
 	{
 		PackageHeaderDataReader << VersioningInfo.Emplace();
 	}
+	// Load name map
 	TArray<FDisplayNameEntryId> PackageNameMap = LoadNameBatch(PackageHeaderDataReader);
 
+	// Only attempt to load data resource table if this is UE5.2 zen package or we have no versioning info
+	// Also do not attempt to load if it was explicitly disabled via the command line
+	const bool bShouldLoadDataResource = (!VersioningInfo.IsSet() || VersioningInfo->ZenVersion >= EZenPackageVersion::DataResourceTable) &&
+		!FParse::Param( FCommandLine::Get(), TEXT("NoDataResourceTable") );
+
+	// Load data resource table
+	TArray<FBulkDataMapEntry> ResultBulkDataEntries;
+	if ( bShouldLoadDataResource )
+	{
+		int64 BulkDataMapSize = 0;
+		PackageHeaderDataReader << BulkDataMapSize;
+		
+		const uint8* BulkDataMapData = PackageSummaryData + sizeof(FZenPackageSummary) + PackageHeaderDataReader.Tell();
+		TArrayView<const FBulkDataMapEntry> BulkDataEntries = MakeArrayView(reinterpret_cast<const FBulkDataMapEntry*>(BulkDataMapData), BulkDataMapSize / sizeof(FBulkDataMapEntry));
+
+		ResultBulkDataEntries.Append( BulkDataEntries );
+	}
+	
 	const FName PackageName = PackageSummary->Name.ResolveName(PackageNameMap);
 
 	// Find package header to resolve imported package IDs
@@ -237,6 +258,7 @@ FPackageMapExportBundleEntry* FIoStorePackageMap::ReadExportBundleData( const FP
 	PackageData.PackageFlags = PackageSummary->PackageFlags;
 	PackageData.VersioningInfo = VersioningInfo;
 	PackageData.PackageChunkId = ChunkInfo.Id;
+	PackageData.BulkDataResourceTable = ResultBulkDataEntries;
 
 	// get rid of standard filename prefix
 	PackageData.PackageFilename.RemoveFromStart( TEXT("../../../") );

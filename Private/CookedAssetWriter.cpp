@@ -939,6 +939,28 @@ void FCookedAssetWriter::WritePackageHeader(FArchive& Ar, FAssetSerializationCon
 		}
 	}
 
+	// Write object data resources
+	{
+		Context.Summary.DataResourceOffset = (int32) Ar.Tell();
+
+		TArray<FObjectDataResource> ObjectDataResources;
+		for ( const FBulkDataMapEntry& Entry : Context.BundleData->BulkDataResourceTable )
+		{
+			FObjectDataResource& DataResource = ObjectDataResources.AddDefaulted_GetRef();
+
+			DataResource.SerialOffset = Entry.SerialOffset;
+			DataResource.DuplicateSerialOffset = Entry.DuplicateSerialOffset;
+			DataResource.SerialSize = Entry.SerialSize;
+			DataResource.LegacyBulkDataFlags = Entry.Flags;
+
+			// EObjectDataResourceFlags Flags -- not used by anything yet apparently and not serialized by PackageStoreOptimizer
+			// FPackageIndex OuterIndex -- written to FPackageSummary, not read by anything and not serialized by PackageStoreOptimizer
+			// int64 RawSize -- size of uncompressed bulk data, not serialized by PackageStoreOptimizer because in cooked builds bulk data is never compressed
+			DataResource.RawSize = Entry.SerialSize;
+		}
+		FObjectDataResource::Serialize( Ar, ObjectDataResources);
+	}
+
 	// We do not support package trailer based bulk data serialized, it can only be loaded by the editor bulk data
 	Context.Summary.PayloadTocOffset = INDEX_NONE;
 

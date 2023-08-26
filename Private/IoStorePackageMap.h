@@ -133,6 +133,8 @@ struct FPackageMapExportBundleEntry
 	FIoChunkId PackageChunkId;
 	/** ID of the bulk data chunks for this package */
 	TArray<FIoChunkId> BulkDataChunkIds;
+	/** A map of bulk data in the chunks owned by this package */
+	TArray<FBulkDataMapEntry> BulkDataResourceTable;
 };
 
 /** Package map is a central storage mapping package IDs (and overall any FPackageObjectIndex objects) to their names and locations */
