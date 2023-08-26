@@ -34,7 +34,7 @@ INT32_MAIN_INT32_ARGC_TCHAR_ARGV()
 	return Result;
 }
 
-bool FIOStoreTools::ExtractPackagesFromContainers( const FString& ContainerDirPath, const FString& OutputDirPath, const FString& EncryptionKeysFile )
+bool FIOStoreTools::ExtractPackagesFromContainers( const FString& ContainerDirPath, const FString& OutputDirPath, const FString& EncryptionKeysFile, EZenPackageVersion DefaultZenPackageVersion, const FString& PackageFilter )
 {
 	TMap<FGuid, FAES::FAESKey> EncryptionKeys;
 	if ( !EncryptionKeysFile.IsEmpty() )
@@ -112,6 +112,7 @@ bool FIOStoreTools::ExtractPackagesFromContainers( const FString& ContainerDirPa
 
 	UE_LOG( LogIoStoreTools, Display, TEXT("Building Package Map from Containers") );
 	const TSharedPtr<FIoStorePackageMap> PackageMap = MakeShared<FIoStorePackageMap>();
+	PackageMap->SetDefaultZenPackageVersion( DefaultZenPackageVersion );
 
 	for ( const TSharedPtr<FIoStoreReader>& Reader : ContainerReaders )
 	{
@@ -121,10 +122,10 @@ bool FIOStoreTools::ExtractPackagesFromContainers( const FString& ContainerDirPa
 
 	UE_LOG( LogIoStoreTools, Display, TEXT("Begin writing Cooked Packages to '%s'"), *OutputDirPath );
 	const TSharedPtr<FCookedAssetWriter> PackageWriter = MakeShared<FCookedAssetWriter>( PackageMap, OutputDirPath );
-
+	
 	for ( const TSharedPtr<FIoStoreReader>& Reader : ContainerReaders )
 	{
-		PackageWriter->WritePackagesFromContainer( Reader );
+		PackageWriter->WritePackagesFromContainer( Reader, PackageFilter );
 		PackageWriter->WriteGlobalScriptObjects( Reader );
 	}
 	
@@ -153,7 +154,12 @@ bool FIOStoreTools::ExecuteIOStoreTools(const TCHAR* Cmd)
 		}
 
 		FString EncryptionKeysFile;
-		if ( FParse::Value( Cmd, TEXT("-EncryptionKeys="), EncryptionKeysFile ) )
+		if ( FParse::Value( Cmd, TEXT("EncryptionKeys="), EncryptionKeysFile ) )
+		{
+			EncryptionKeysFile = FPaths::ConvertRelativePathToFull( EncryptionKeysFile );
+		}
+		// Legacy argument support, it should not have a forward slash
+		else if ( FParse::Value( Cmd, TEXT("-EncryptionKeys="), EncryptionKeysFile ) )
 		{
 			EncryptionKeysFile = FPaths::ConvertRelativePathToFull( EncryptionKeysFile );
 		}
@@ -163,10 +169,44 @@ bool FIOStoreTools::ExecuteIOStoreTools(const TCHAR* Cmd)
 		
 		UE_LOG( LogIoStoreTools, Display, TEXT("Extracting packages from IoStore containers at '%s' to directory '%s'"), *ContainerFolderPath, *ExtractFolderRootPath );
 
-		return ExtractPackagesFromContainers( ContainerFolderPath, ExtractFolderRootPath, EncryptionKeysFile );
+		EZenPackageVersion DefaultZenPackageVersion = EZenPackageVersion::Latest;
+
+		// New zen package version format
+		FString ZenPackageVersionString;
+		if ( FParse::Value( Cmd, TEXT("ZenPackageVersion="), ZenPackageVersionString ) )
+		{
+			if ( ZenPackageVersionString == TEXT("Initial") )
+			{
+				DefaultZenPackageVersion = EZenPackageVersion::Initial;
+			}
+			else if ( ZenPackageVersionString == TEXT("DataResourceTable") )
+			{
+				DefaultZenPackageVersion = EZenPackageVersion::DataResourceTable;
+			}
+			else if ( ZenPackageVersionString == TEXT("Latest") )
+			{
+				DefaultZenPackageVersion = EZenPackageVersion::Latest;
+			}
+			else
+			{
+				UE_LOG( LogIoStoreTools, Display, TEXT("Unknown Zen Package Version '%s'. Available versions are: Initial (UE5), DataResourceTable(UE5.2) and Latest"), *ZenPackageVersionString );
+				return false;
+			}
+		}
+		// Legacy argument to force initial zen package version
+		if ( FParse::Param( Cmd, TEXT("NoDataResourceTable") ) )
+		{
+			DefaultZenPackageVersion = EZenPackageVersion::Initial;
+		}
+
+		// Maybe parse a package filter
+		FString PotentialPackageFilter;
+		FParse::Value( Cmd, TEXT("PackageFilter="), PotentialPackageFilter );
+
+		return ExtractPackagesFromContainers( ContainerFolderPath, ExtractFolderRootPath, EncryptionKeysFile, DefaultZenPackageVersion, PotentialPackageFilter );
 	}
 
 	UE_LOG( LogIoStoreTools, Display, TEXT("Unknown command. Available commands: ") );
-	UE_LOG( LogIoStoreTools, Display, TEXT("ZenTools ExtractPackages <ContainerFolderPath> <ExtractionDir> [-EncryptionKeys=<KeyFile>] -- Extract packages from the IoStore containers in the provided folder") );
+	UE_LOG( LogIoStoreTools, Display, TEXT("ZenTools ExtractPackages <ContainerFolderPath> <ExtractionDir> [-EncryptionKeys=<KeyFile>] [-ZenPackageVersion=<Initial/DataResourceTable/Latest>] [-PackageFilter=<Package/Path/Filter>] -- Extract packages from the IoStore containers in the provided folder") );
 	return false;
 }

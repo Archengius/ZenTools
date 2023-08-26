@@ -5,6 +5,7 @@
 #include "ZenTools.h"
 #include "Dom/JsonObject.h"
 #include "HAL/FileManager.h"
+#include "Internationalization/Regex.h"
 #include "Misc/Paths.h"
 #include "Serialization/LargeMemoryWriter.h"
 #include "Serialization/MemoryWriter.h"
@@ -62,7 +63,7 @@ FCookedAssetWriter::FCookedAssetWriter(const TSharedPtr<FIoStorePackageMap>& InP
 {
 }
 
-void FCookedAssetWriter::WritePackagesFromContainer( const TSharedPtr<FIoStoreReader>& Reader )
+void FCookedAssetWriter::WritePackagesFromContainer( const TSharedPtr<FIoStoreReader>& Reader, const FString& PackageFilter )
 {
 	const FIoContainerId ContainerId = Reader->GetContainerId();
 	UE_LOG( LogIoStoreTools, Display, TEXT("Writing asset files for Container %lld"), ContainerId.Value() );
@@ -70,15 +71,57 @@ void FCookedAssetWriter::WritePackagesFromContainer( const TSharedPtr<FIoStoreRe
 	FPackageContainerMetadata ContainerMetadata;
 	if ( PackageMap->FindPackageContainerMetadata( ContainerId, ContainerMetadata ) )
 	{
+		const TFunction<bool(const FPackageId&)> PackageFilterFunction = MakePackageFilterFunction( PackageFilter );
+		
 		for ( const FPackageId& PackageId : ContainerMetadata.PackagesInContainer )
 		{
-			WriteSinglePackage( PackageId, false, Reader );
+			if ( PackageFilterFunction( PackageId ) )
+			{
+				WriteSinglePackage( PackageId, false, Reader );
+			}
 		}
 		for ( const FPackageId& OptionalPackageId : ContainerMetadata.OptionalPackagesInContainer )
 		{
-			WriteSinglePackage( OptionalPackageId, true, Reader );
+			if ( PackageFilterFunction( OptionalPackageId ) )
+			{
+				WriteSinglePackage( OptionalPackageId, true, Reader );
+			}
 		}
 	}
+}
+
+TFunction<bool(const FPackageId&)> FCookedAssetWriter::MakePackageFilterFunction(const FString& PackageFilter) const
+{
+	// No filter is specified, we write all packages
+	if ( PackageFilter.IsEmpty() )
+	{
+		return [](const FPackageId&) { return true; };
+	}
+
+	// Regex match filter
+	if ( PackageFilter.StartsWith("!") )
+	{
+		const FRegexPattern RegexPattern( PackageFilter.RightChop( 1 ) );
+		
+		return [this, RegexPattern](const FPackageId& PackageId )
+		{
+			const FName PackageName = PackageMap->FindPackageName( PackageId );
+			FRegexMatcher RegexMatcher( RegexPattern, PackageName.ToString() );
+
+			return RegexMatcher.FindNext();
+		};
+	}
+
+	// Normal prefix-based match filter
+	return [this, PackageFilter](const FPackageId& PackageId )
+	{
+		const FName PackageName = PackageMap->FindPackageName( PackageId );
+
+		TStringBuilder<256> PackageNameBuffer;
+		PackageName.ToString( PackageNameBuffer );
+
+		return PackageNameBuffer.ToView().StartsWith( PackageFilter );
+	};
 }
 
 void FCookedAssetWriter::WriteGlobalScriptObjects(const TSharedPtr<FIoStoreReader>& Reader) const

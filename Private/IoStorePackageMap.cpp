@@ -4,7 +4,11 @@
 #include "Serialization/LargeMemoryReader.h"
 #include "Serialization/MemoryReader.h"
 #include "IO/IoContainerHeader.h"
-#include "Misc/CommandLine.h"
+
+void FIoStorePackageMap::SetDefaultZenPackageVersion(EZenPackageVersion NewDefaultPackageVersion)
+{
+	DefaultZenPackageVersion = NewDefaultPackageVersion;
+}
 
 void FIoStorePackageMap::PopulateFromContainer(const TSharedPtr<FIoStoreReader>& Reader)
 {
@@ -130,6 +134,15 @@ bool FIoStorePackageMap::FindPackageHeader(const FPackageId& PackageId, FPackage
 	return false;
 }
 
+FName FIoStorePackageMap::FindPackageName(const FPackageId& PackageId) const
+{
+	if ( const FPackageMapExportBundleEntry* Entry = PackageMap.Find( PackageId ) )
+	{
+		return Entry->PackageName;
+	}
+	return NAME_None;
+}
+
 bool FIoStorePackageMap::FindScriptObject(const FPackageObjectIndex& Index, FPackageMapScriptObjectEntry& OutMapEntry) const
 {
 	check( Index.IsScriptImport() );
@@ -221,21 +234,19 @@ FPackageMapExportBundleEntry* FIoStorePackageMap::ReadExportBundleData( const FP
 	FMemoryReaderView PackageHeaderDataReader(PackageHeaderDataView);
 
 	TOptional<FZenPackageVersioningInfo> VersioningInfo;
+	EZenPackageVersion ZenPackageVersion = DefaultZenPackageVersion;
+	
 	if (PackageSummary->bHasVersioningInfo)
 	{
 		PackageHeaderDataReader << VersioningInfo.Emplace();
+		ZenPackageVersion = VersioningInfo->ZenVersion;
 	}
 	// Load name map
 	TArray<FDisplayNameEntryId> PackageNameMap = LoadNameBatch(PackageHeaderDataReader);
-
-	// Only attempt to load data resource table if this is UE5.2 zen package or we have no versioning info
-	// Also do not attempt to load if it was explicitly disabled via the command line
-	const bool bShouldLoadDataResource = (!VersioningInfo.IsSet() || VersioningInfo->ZenVersion >= EZenPackageVersion::DataResourceTable) &&
-		!FParse::Param( FCommandLine::Get(), TEXT("NoDataResourceTable") );
-
+	
 	// Load data resource table
 	TArray<FBulkDataMapEntry> ResultBulkDataEntries;
-	if ( bShouldLoadDataResource )
+	if ( ZenPackageVersion >= EZenPackageVersion::DataResourceTable )
 	{
 		int64 BulkDataMapSize = 0;
 		PackageHeaderDataReader << BulkDataMapSize;

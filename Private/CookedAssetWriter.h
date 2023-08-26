@@ -82,12 +82,13 @@ protected:
 public:
 	FCookedAssetWriter( const TSharedPtr<FIoStorePackageMap>& InPackageMap, const FString& InOutputDir );
 	
-	void WritePackagesFromContainer( const TSharedPtr<FIoStoreReader>& Reader );
+	void WritePackagesFromContainer( const TSharedPtr<FIoStoreReader>& Reader, const FString& PackageFilter );
 	void WriteGlobalScriptObjects( const TSharedPtr<FIoStoreReader>& Reader ) const;
 	void WritePackageStoreManifest() const;
 
 	FORCEINLINE int32 GetTotalNumPackagesWritten() const { return NumPackagesWritten; }
 private:
+	TFunction<bool(const FPackageId&)> MakePackageFilterFunction( const FString& PackageFilter ) const;
 	void WriteSinglePackage( FPackageId PackageId, bool bIsOptionalSegmentPackage, const TSharedPtr<FIoStoreReader>& Reader );
 	void ProcessPackageSummaryAndNamesAndExportsAndImports( FAssetSerializationContext& Context ) const;
 	static FExportBundleEntry BuildPreloadDependenciesFromExportBundle( int32 ExportBundleIndex, FAssetSerializationContext& Context );

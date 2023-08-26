@@ -145,7 +145,10 @@ private:
 	TMap<FPackageObjectIndex, FPackageMapScriptObjectEntry> ScriptObjectMap;
 	TMap<FPackageId, FPackageMapExportBundleEntry> PackageMap;
 	TMap<FIoContainerId, FPackageContainerMetadata> ContainerMetadata;
+	EZenPackageVersion DefaultZenPackageVersion{EZenPackageVersion::Latest};
 public:
+	void SetDefaultZenPackageVersion( EZenPackageVersion NewDefaultPackageVersion );
+
 	/** Salvages the provided IoStore container for the exports and script objects and populates the map */
 	void PopulateFromContainer(const TSharedPtr<FIoStoreReader>& Reader);
 
@@ -158,6 +161,8 @@ public:
 	bool FindPackageContainerMetadata( FIoContainerId ContainerId, FPackageContainerMetadata& OutMetadata ) const;
 
 	bool FindPackageHeader( const FPackageId& PackageId, FPackageHeaderData& OutPackageHeader ) const;
+
+	FName FindPackageName( const FPackageId& PackageId ) const;
 
 	FORCEINLINE int32 GetTotalPackageCount() const { return PackageMap.Num(); }
 private:
