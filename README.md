@@ -1,3 +1,7 @@
+# Notice: This project has been superseded by retoc
+
+https://github.com/trumank/retoc
+
 # ZenTools
 
 ZenTools extracts cooked packages (.uasset/.uexp) from the IoStore container files (.ucas/.utoc + .pak).
